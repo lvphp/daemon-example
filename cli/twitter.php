@@ -5,44 +5,41 @@ use GuzzleHttp\Stream as Stream;
 
 //autoloading and config
 require_once '../vendor/autoload.php';
-$config = include '../config.php';
 
-error_log('loaded config');
+$getStream = function(){
+    $config = include '../config.php';
+    error_log('loaded config');
 
-//http client
-$client = new HttpClient();
+    //http client
+    $client = new HttpClient();
 
-//oauth setup
-$oauth = new Oauth1($config['oauth']);
-$client->getEmitter()->attach($oauth);
+    //oauth setup
+    $oauth = new Oauth1($config['oauth']);
+    $client->getEmitter()->attach($oauth);
 
-error_log('setup oauth');
+    error_log('setup oauth');
 
-//tracked keywords
-$track = [
-    'fail',
-    'lvphp',
-    'lvtech',
-    'tjlytle'
-];
+    //tracked keywords
+    $track = $config['track'];
+    error_log('tracking: ' . implode(',', $track));
 
-//request for twitter's stream api
-$request = $client->createRequest(
-    'POST',
-    'https://stream.twitter.com/1.1/statuses/filter.json',
-    ['stream' => true, 'auth' => 'oauth']);
+    //request for twitter's stream api
+    $request = $client->createRequest(
+        'POST',
+        'https://stream.twitter.com/1.1/statuses/filter.json',
+        ['stream' => true, 'auth' => 'oauth']);
 
-//set the track keywords
-$request->getBody()->setField('track', implode(',', $track));
+    //set the track keywords
+    $request->getBody()->setField('track', implode(',', $track));
 
-error_log('created stream request');
+    error_log('created stream request');
 
-//get the streamed response
-$response = $client->send($request);
-$stream = $response->getBody();
+    //get the streamed response
+    $response = $client->send($request);
+    $stream = $response->getBody();
 
-error_log('connected to stream');
-
+    return $stream;
+};
 
 //read lines from the response
 $count = 0;
@@ -57,19 +54,24 @@ $stats = function($count, $start){
     return time();
 };
 
-//add some signals
+//shutdown
 $shutdown = function($signal) use (&$run){
     error_log('caught signal: ' . $signal);
     $run = false;
 };
 
-
-//how often should we check for signals
-declare(ticks = 1);
+//reload
+$reload = function($signal) use ($getStream, &$stream){
+    error_log('caught signal: ' . $signal);
+    $stream = $getStream();
+};
 
 //register the handler
 pcntl_signal(SIGINT, $shutdown);
+pcntl_signal(SIGHUP, $reload);
 
+$stream = $getStream();
+error_log('connected to stream');
 while(!$stream->eof() AND $run){
     $tweet = Stream\read_line($stream);
     $tweet = json_decode($tweet, true);
@@ -81,6 +83,9 @@ while(!$stream->eof() AND $run){
     if(time() > ($time + 30)){
         $time = $stats($count, $start);
     }
+
+    //only process the signals here
+    pcntl_signal_dispatch();
 }
 
 //do some shutdown like things
